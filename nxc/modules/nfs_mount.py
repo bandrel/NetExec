@@ -29,7 +29,7 @@ class NXCModule:
         """
         MOUNT_BASE     Base directory for mount points (default: /mnt)
         USE_HOSTNAME   Include hostname in mount path (default: true)
-        CREATE_DIRS    Create mount point directories (default: false)
+        CREATE_DIRS    Prepend `mkdir -p <mount_point>` to each emitted mount command (default: false)
         SHARES         Manually specified shares "server1:/path1,server2:/path2"
         OUTFILE        Write commands as executable script (default: ~/.nxc/modules/nfs_mount/<host>.sh)
         """
@@ -77,24 +77,17 @@ class NXCModule:
             context.log.display("No NFS shares found to process")
             return
 
-        # Generate mount points and commands
-        mount_points = []
+        # Generate mount commands
         commands = []
 
         for server, share_path, hostname_for_path in all_shares:
             mount_point = self._build_mount_point(
                 self.mount_base, hostname_for_path, share_path, self.use_hostname
             )
-            mount_points.append(mount_point)
-
             command = self._generate_mount_command(
                 server, share_path, mount_point, self.create_dirs
             )
             commands.append(command)
-
-        # Create directories if requested
-        if self.create_dirs:
-            self._create_mount_directories(context, mount_points)
 
         # Output mount commands
         context.log.display("\n[*] NFS Mount Commands:")
@@ -273,18 +266,3 @@ class NXCModule:
             context.log.success(f"Wrote mount script to {outfile_path}")
         except OSError as e:
             context.log.fail(f"Failed to write output file {outfile_path}: {e}")
-
-    def _create_mount_directories(self, context, mount_points):
-        """
-        Create mount point directories if CREATE_DIRS is enabled.
-
-        Args:
-            context: NXC context for logging
-            mount_points (list): List of mount point paths to create
-        """
-        for mount_point in mount_points:
-            try:
-                os.makedirs(mount_point, exist_ok=True)
-                context.log.success(f"Created mount point: {mount_point}")
-            except OSError as e:
-                context.log.fail(f"Failed to create directory: {mount_point} [{e}]")
