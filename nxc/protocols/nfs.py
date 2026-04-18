@@ -171,11 +171,14 @@ class nfs(connection):
                             else:
                                 file_handle = entry["name_handle"]["handle"]["data"]
                                 attrs = self.nfs3.getattr(file_handle, auth=self.auth)
-                                file_size = attrs["attributes"]["size"]
-                                file_size = convert_size(file_size)
+                                file_size_bytes = attrs["attributes"]["size"]
+                                file_size = convert_size(file_size_bytes)
                                 uid = attrs["attributes"]["uid"]
+                                mtime = attrs["attributes"]["mtime"]["seconds"]
+                                ctime = attrs["attributes"]["ctime"]["seconds"]
+                                atime = attrs["attributes"]["atime"]["seconds"]
                                 read_perm, write_perm, exec_perm = self.get_permissions(entry["name_handle"]["handle"]["data"])
-                                contents.append({"path": item_path, "read": read_perm, "write": write_perm, "execute": exec_perm, "filesize": file_size, "uid": uid})
+                                contents.append({"path": item_path, "read": read_perm, "write": write_perm, "execute": exec_perm, "filesize": file_size, "size_bytes": file_size_bytes, "mtime": mtime, "ctime": ctime, "atime": atime, "uid": uid})
 
                     if entry["nextentry"]:
                         # Processing next entries recursively
@@ -190,7 +193,7 @@ class nfs(connection):
 
         if recurse == 0:
             read_perm, write_perm, exec_perm = self.get_permissions(file_handle)
-            return [{"path": f"{path}/", "read": read_perm, "write": write_perm, "execute": exec_perm, "filesize": "-", "uid": self.auth["uid"]}]
+            return [{"path": f"{path}/", "read": read_perm, "write": write_perm, "execute": exec_perm, "filesize": "-", "size_bytes": 0, "mtime": 0, "ctime": 0, "atime": 0, "uid": self.auth["uid"]}]
 
         items = self.nfs3.readdirplus(file_handle, auth=self.auth)
         if "resfail" in items:
