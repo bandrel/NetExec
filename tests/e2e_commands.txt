@@ -332,3 +332,6 @@ netexec nfs TARGET_HOST -u "" -p "" --shares
 netexec nfs TARGET_HOST -u "" -p "" --enum-shares
 netexec nfs TARGET_HOST -u "" -p "" --get-file /NFStest/test/test.txt ../test.txt
 netexec nfs TARGET_HOST -u "" -p "" --put-file ../test.txt /NFStest/test
+# nfs_spider_plus takes a while to run, so it is commented out during normal testing
+# netexec nfs TARGET_HOST -u "" -p "" -M nfs_spider_plus -o MAX_FILE_SIZE=100
+# netexec nfs TARGET_HOST -u "" -p "" -M nfs_spider_plus -o EXCLUDE_EXTS=tmp,log EXCLUDE_FILTER=backup MAX_DEPTH=5
