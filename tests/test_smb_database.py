@@ -146,8 +146,16 @@ def test_remove_admin_relation():
     pass
 
 
-def test_is_credential_valid():
-    pass
+def test_is_credential_valid(db):
+    db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
+    valid_id = db.get_credentials()[0].id
+    assert db.is_credential_valid(valid_id) is True
+    assert db.is_credential_valid(9999) is False
+
+    # a credential with a NULL password must NOT be considered valid
+    db.add_credential("plaintext", "TEST.DEV", "nopw", None)
+    nopw_id = db.get_user("TEST.DEV", "nopw")[0].id
+    assert db.is_credential_valid(nopw_id) is False
 
 
 def test_get_credentials():

@@ -65,6 +65,7 @@ class navigator(DatabaseNavigator):
                 "Hostname",
                 "Domain",
                 "OS",
+                "DC",
                 "SMBv1",
                 "Signing",
                 "Spooler",
@@ -83,6 +84,10 @@ class navigator(DatabaseNavigator):
                 os = host[4].decode()
             except Exception:
                 os = host[4]
+            try:
+                dc = host[5]
+            except IndexError:
+                dc = ""
             try:
                 smbv1 = host[6]
                 signing = host[7]
@@ -107,6 +112,7 @@ class navigator(DatabaseNavigator):
                     hostname,
                     domain,
                     os,
+                    dc,
                     smbv1,
                     signing,
                     spooler,
@@ -151,7 +157,9 @@ class navigator(DatabaseNavigator):
         else:
             shares = self.db.get_shares(filter_term=filter_term)
 
-            if len(shares) > 1:
+            if len(shares) == 0:
+                print(f"[!] No shares found matching '{filter_term}'")
+            elif len(shares) > 1:
                 self.display_shares(shares)
             elif len(shares) == 1:
                 share = shares[0]
@@ -210,7 +218,9 @@ class navigator(DatabaseNavigator):
         else:
             groups = self.db.get_groups(filter_term=filter_term)
 
-            if len(groups) > 1:
+            if len(groups) == 0:
+                print(f"[!] No groups found matching '{filter_term}'")
+            elif len(groups) > 1:
                 self.display_groups(groups)
             elif len(groups) == 1:
                 data = [
@@ -431,11 +441,9 @@ class navigator(DatabaseNavigator):
         """
         print_help(help_string)
 
-    def do_dpapi(self, line):
-        filter_term = line.strip()
-
-        if filter_term == "":
-            secrets = self.db.get_dpapi_secrets()
+    def _print_dpapi_secrets(self, secrets, empty_msg):
+        """Print a DPAPI secrets table, or an informational message when empty."""
+        if len(secrets) > 0:
             secrets.insert(
                 0,
                 [
@@ -449,121 +457,33 @@ class navigator(DatabaseNavigator):
                 ],
             )
             print_table(secrets, title="DPAPI Secrets")
-        elif filter_term.split()[0].lower() == "browser":
-            secrets = self.db.get_dpapi_secrets(dpapi_type="MSEDGE")
-            secrets += self.db.get_dpapi_secrets(dpapi_type="GOOGLE CHROME")
-            secrets += self.db.get_dpapi_secrets(dpapi_type="IEX")
-            secrets += self.db.get_dpapi_secrets(dpapi_type="FIREFOX")
-            if len(secrets) > 0:
-                secrets.insert(
-                    0,
-                    [
-                        "ID",
-                        "Host",
-                        "DPAPI Type",
-                        "Windows User",
-                        "Username",
-                        "Password",
-                        "URL",
-                    ],
-                )
-                print_table(secrets, title="DPAPI Secrets")
-        elif filter_term.split()[0].lower() == "chrome":
-            secrets = self.db.get_dpapi_secrets(dpapi_type="GOOGLE CHROME")
-            if len(secrets) > 0:
-                secrets.insert(
-                    0,
-                    [
-                        "ID",
-                        "Host",
-                        "DPAPI Type",
-                        "Windows User",
-                        "Username",
-                        "Password",
-                        "URL",
-                    ],
-                )
-                print_table(secrets, title="DPAPI Secrets")
-        elif filter_term.split()[0].lower() == "msedge":
-            secrets = self.db.get_dpapi_secrets(dpapi_type="MSEDGE")
-            if len(secrets) > 0:
-                secrets.insert(
-                    0,
-                    [
-                        "ID",
-                        "Host",
-                        "DPAPI Type",
-                        "Windows User",
-                        "Username",
-                        "Password",
-                        "URL",
-                    ],
-                )
-                print_table(secrets, title="DPAPI Secrets")
-        elif filter_term.split()[0].lower() == "credentials":
-            secrets = self.db.get_dpapi_secrets(dpapi_type="CREDENTIAL")
-            if len(secrets) > 0:
-                secrets.insert(
-                    0,
-                    [
-                        "ID",
-                        "Host",
-                        "DPAPI Type",
-                        "Windows User",
-                        "Username",
-                        "Password",
-                        "URL",
-                    ],
-                )
-                print_table(secrets, title="DPAPI Secrets")
-        elif filter_term.split()[0].lower() == "iex":
-            secrets = self.db.get_dpapi_secrets(dpapi_type="IEX")
-            if len(secrets) > 0:
-                secrets.insert(
-                    0,
-                    [
-                        "ID",
-                        "Host",
-                        "DPAPI Type",
-                        "Windows User",
-                        "Username",
-                        "Password",
-                        "URL",
-                    ],
-                )
-                print_table(secrets, title="DPAPI Secrets")
-        elif filter_term.split()[0].lower() == "firefox":
-            secrets = self.db.get_dpapi_secrets(dpapi_type="FIREFOX")
-            if len(secrets) > 0:
-                secrets.insert(
-                    0,
-                    [
-                        "ID",
-                        "Host",
-                        "DPAPI Type",
-                        "Windows User",
-                        "Username",
-                        "Password",
-                        "URL",
-                    ],
-                )
-                print_table(secrets, title="DPAPI Secrets")
+        else:
+            print(f"[!] {empty_msg}")
+
+    def do_dpapi(self, line):
+        filter_term = line.strip()
+        subcommand = filter_term.split()[0].lower() if filter_term else ""
+
+        # subcommand -> list of dpapi_types to aggregate
+        type_map = {
+            "browser": ["MSEDGE", "GOOGLE CHROME", "IEX", "FIREFOX"],
+            "chrome": ["GOOGLE CHROME"],
+            "msedge": ["MSEDGE"],
+            "credentials": ["CREDENTIAL"],
+            "iex": ["IEX"],
+            "firefox": ["FIREFOX"],
+        }
+
+        if filter_term == "":
+            self._print_dpapi_secrets(self.db.get_dpapi_secrets(), "No DPAPI secrets found")
+        elif subcommand in type_map:
+            secrets = []
+            for dpapi_type in type_map[subcommand]:
+                secrets += self.db.get_dpapi_secrets(dpapi_type=dpapi_type)
+            self._print_dpapi_secrets(secrets, f"No DPAPI secrets found for '{subcommand}'")
         else:
             secrets = self.db.get_dpapi_secrets(filter_term=filter_term)
-            if len(secrets) > 0:
-                secrets.insert(
-                    0,
-                    [
-                        "ID",
-                        "Host",
-                        "DPAPI Type",
-                        "Windows User",
-                        "Username",
-                        "Password",
-                        "URL",
-                    ],
-                )
-                print_table(secrets, title="DPAPI Secrets")
+            self._print_dpapi_secrets(secrets, f"No DPAPI secrets found matching '{filter_term}'")
 
     def help_dpapi(self):
         help_string = """
@@ -674,7 +594,7 @@ class navigator(DatabaseNavigator):
         Table format:
         | 'CredID', 'Admin On', 'CredType', 'Domain', 'UserName', 'Password' |
         Subcommands:
-            add - format: "add domain username password <notes> <credType> <sid>"
+            add - format: "add domain username password"
             remove - format: "remove <credID>"
             plaintext - prints plaintext creds
             hash - prints hashed creds
@@ -701,7 +621,7 @@ class navigator(DatabaseNavigator):
 
     def complete_hosts(self, text, line):
         """Tab-complete 'hosts' commands."""
-        commands = ("add", "remove", "dc")
+        commands = ("dc", "signing", "spooler", "zerologon", "petitpotam")
 
         mline = line.partition(" ")[2]
         offs = len(mline) - len(text)

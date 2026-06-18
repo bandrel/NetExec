@@ -406,7 +406,7 @@ class database(BaseDB):
         """Check if this credential ID is valid."""
         q = select(self.UsersTable).filter(
             self.UsersTable.c.id == credential_id,
-            self.UsersTable.c.password is not None,
+            self.UsersTable.c.password.isnot(None),
         )
         results = self.db_execute(q).all()
         return len(results) > 0
