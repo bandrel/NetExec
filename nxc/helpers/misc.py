@@ -27,7 +27,8 @@ def gen_random_string(length=10):
 
 
 def validate_ntlm(data):
-    allowed = re.compile(r"^[0-9a-f]{32}", re.IGNORECASE)
+    # a bare NT hash (32 hex chars) or the full LM:NT form (32:32), and nothing else
+    allowed = re.compile(r"^[0-9a-f]{32}(:[0-9a-f]{32})?$", re.IGNORECASE)
     return bool(allowed.match(data))
 
 

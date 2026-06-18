@@ -306,8 +306,7 @@ class database(BaseDB):
                 "domain": domain,
                 "username": username,
                 "password": password,
-                "groupid": group_id,
-                "pillaged_from": pillaged_from,
+                "pillaged_from_hostid": pillaged_from,
             }
             credentials = [new_cred]
         # update existing cred data
@@ -325,10 +324,9 @@ class database(BaseDB):
                 if password is not None:
                     cred_data["password"] = password
                 if group_id is not None:
-                    cred_data["groupid"] = group_id
                     groups.append({"userid": cred_data["id"], "groupid": group_id})
                 if pillaged_from is not None:
-                    cred_data["pillaged_from"] = pillaged_from
+                    cred_data["pillaged_from_hostid"] = pillaged_from
                 # only add cred to be updated if it has changed
                 if cred_data not in credentials:
                     credentials.append(cred_data)
@@ -341,10 +339,20 @@ class database(BaseDB):
 
         self.db_execute(q_users, credentials)  # .scalar()
 
-        if groups:
+        # On a brand-new credential the row id isn't known until after the insert,
+        # so resolve it now to record group membership (the update branch above
+        # handles credentials that already existed).
+        if not results and group_id is not None:
+            new_user = self.get_user(domain, username)
+            if new_user:
+                groups.append({"userid": new_user[0].id, "groupid": group_id})
+
+        # only insert relations that don't already exist, to avoid duplicates
+        new_relations = [rel for rel in groups if not self.get_group_relations(user_id=rel["userid"], group_id=rel["groupid"])]
+        if new_relations:
             q_groups = Insert(self.GroupRelationsTable)
 
-            self.db_execute(q_groups, groups)
+            self.db_execute(q_groups, new_relations)
 
     def remove_credentials(self, creds_id):
         """Removes a credential ID from the database"""
@@ -440,10 +448,11 @@ class database(BaseDB):
 
     def is_credential_local(self, credential_id):
         q = select(self.UsersTable.c.domain).filter(self.UsersTable.c.id == credential_id)
-        user_domain = self.db_execute(q).all()
+        user_domain = self.db_execute(q).first()
 
         if user_domain:
-            q = select(self.HostsTable).filter(func.lower(self.HostsTable.c.id) == func.lower(user_domain))
+            # a credential is "local" if its domain matches a known host's name
+            q = select(self.HostsTable).filter(func.lower(self.HostsTable.c.hostname) == func.lower(user_domain[0]))
             results = self.db_execute(q).all()
             return len(results) > 0
 
@@ -588,11 +597,11 @@ class database(BaseDB):
     def get_group_relations(self, user_id=None, group_id=None):
         if user_id and group_id:
             q = select(self.GroupRelationsTable).filter(
-                self.GroupRelationsTable.c.id == user_id,
+                self.GroupRelationsTable.c.userid == user_id,
                 self.GroupRelationsTable.c.groupid == group_id,
             )
         elif user_id:
-            q = select(self.GroupRelationsTable).filter(self.GroupRelationsTable.c.id == user_id)
+            q = select(self.GroupRelationsTable).filter(self.GroupRelationsTable.c.userid == user_id)
         elif group_id:
             q = select(self.GroupRelationsTable).filter(self.GroupRelationsTable.c.groupid == group_id)
 
@@ -734,7 +743,7 @@ class database(BaseDB):
         Check if this group ID is valid.
         :dpapi_secret_id is a primary id
         """
-        q = select(self.DpapiSecretsTable).filter(func.lower(self.DpapiSecretsTable.c.id) == dpapi_secret_id)
+        q = select(self.DpapiSecretsTable).filter(self.DpapiSecretsTable.c.id == dpapi_secret_id)
         results = self.db_execute(q).first()
         valid = results is not None
         nxc_logger.debug(f"is_dpapi_secret_valid(groupID={dpapi_secret_id}) => {valid}")
