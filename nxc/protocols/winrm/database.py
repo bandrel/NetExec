@@ -187,11 +187,7 @@ class database(BaseDB):
 
     def remove_credentials(self, creds_id):
         """Removes a credential ID from the database"""
-        del_hosts = []
-        for cred_id in creds_id:
-            q = delete(self.UsersTable).filter(self.UsersTable.c.id == cred_id)
-            del_hosts.append(q)
-        self.db_execute(q)
+        self.db_execute(delete(self.UsersTable).where(self.UsersTable.c.id.in_(creds_id)))
 
     def add_admin_user(self, credtype, domain, username, password, host, user_id=None):
         domain = domain.split(".")[0]
@@ -226,7 +222,8 @@ class database(BaseDB):
 
         admin_relations_insert = Insert(self.AdminRelationsTable)
 
-        self.db_execute(admin_relations_insert, add_links)
+        if add_links:
+            self.db_execute(admin_relations_insert, add_links)
 
     def get_admin_relations(self, user_id=None, host_id=None):
         if user_id:
@@ -252,7 +249,7 @@ class database(BaseDB):
         """Check if this credential ID is valid."""
         q = select(self.UsersTable).filter(
             self.UsersTable.c.id == credential_id,
-            self.UsersTable.c.password is not None,
+            self.UsersTable.c.password.isnot(None),
         )
         results = self.db_execute(q).all()
         return len(results) > 0

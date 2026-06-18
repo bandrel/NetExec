@@ -163,17 +163,13 @@ class database(BaseDB):
 
     def remove_credentials(self, creds_id):
         """Removes a credential ID from the database"""
-        del_hosts = []
-        for cred_id in creds_id:
-            q = delete(self.CredentialsTable).filter(self.CredentialsTable.c.id == cred_id)
-            del_hosts.append(q)
-        self.db_execute(q)
+        self.db_execute(delete(self.CredentialsTable).where(self.CredentialsTable.c.id.in_(creds_id)))
 
     def is_credential_valid(self, credential_id):
         """Check if this credential ID is valid."""
         q = select(self.CredentialsTable).filter(
             self.CredentialsTable.c.id == credential_id,
-            self.CredentialsTable.c.password is not None,
+            self.CredentialsTable.c.password.isnot(None),
         )
         results = self.db_execute(q).all()
         return len(results) > 0
@@ -286,10 +282,19 @@ class database(BaseDB):
         self.db_execute(q)
 
     def add_directory_listing(self, lir_id, data):
-        pass
+        listing = {"lir_id": lir_id, "data": data}
+        nxc_logger.debug(f"Inserting directory_listing: {listing}")
+        q = Insert(self.DirectoryListingsTable)
+        self.db_execute(q, [listing])
 
-    def get_directory_listing(self):
-        pass
+    def get_directory_listing(self, lir_id=None):
+        q = select(self.DirectoryListingsTable)
+        if lir_id:
+            q = q.filter(self.DirectoryListingsTable.c.lir_id == lir_id)
+        return self.db_execute(q).all()
 
-    def remove_directory_listing(self):
-        pass
+    def remove_directory_listing(self, lir_id=None):
+        q = delete(self.DirectoryListingsTable)
+        if lir_id:
+            q = q.filter(self.DirectoryListingsTable.c.lir_id == lir_id)
+        self.db_execute(q)
