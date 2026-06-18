@@ -3,7 +3,7 @@ import threading
 import warnings
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, ForeignKeyConstraint, Integer, PrimaryKeyConstraint, String, UniqueConstraint, func, select, delete
+from sqlalchemy import Boolean, Column, ForeignKeyConstraint, Integer, PrimaryKeyConstraint, String, UniqueConstraint, func, select, delete, update
 from sqlalchemy.dialects.sqlite import Insert  # used for upsert
 from sqlalchemy.exc import (
     SAWarning
@@ -629,6 +629,12 @@ class database(BaseDB):
             func.lower(self.UsersTable.c.username) == func.lower(username),
         )
         return self.db_execute(q).all()
+
+    def set_host_dc(self, host_id, is_dc):
+        """Update only the domain controller flag for an existing host."""
+        q = update(self.HostsTable).where(self.HostsTable.c.id == host_id).values(dc=is_dc)
+        self.db_execute(q)
+        nxc_logger.debug(f"set_host_dc(host_id={host_id}, is_dc={is_dc})")
 
     def get_domain_controllers(self, domain=None):
         return self.get_hosts(filter_term="dc", domain=domain)

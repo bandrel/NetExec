@@ -202,8 +202,47 @@ def test_get_user():
     pass
 
 
-def test_get_domain_controllers():
-    pass
+def test_set_host_dc(db):
+    db.add_host(
+        "127.0.0.1",
+        "localhost",
+        "TEST.DEV",
+        "Windows Testing 2023",
+        False,
+        True,
+    )
+    host_id = db.get_hosts()[0].id
+    assert db.get_hosts()[0].dc is None
+
+    db.set_host_dc(host_id, True)
+    assert db.get_hosts()[0].dc is True
+
+    db.set_host_dc(host_id, False)
+    assert db.get_hosts()[0].dc is False
+
+
+def test_get_hosts_dc_filter(db):
+    db.add_host("127.0.0.1", "DC01", "TEST.DEV", "Windows Server 2022", False, True, dc=True)
+    db.add_host("127.0.0.2", "WS01", "TEST.DEV", "Windows 11", False, True, dc=False)
+    db.add_host("127.0.0.3", "WS02", "TEST.DEV", "Windows 11", False, True)  # dc left as None
+
+    dcs = db.get_hosts(filter_term="dc")
+    assert len(dcs) == 1
+    assert dcs[0].hostname == "DC01"
+    assert dcs[0].dc is True
+
+
+def test_get_domain_controllers(db):
+    db.add_host("127.0.0.1", "DC01", "TEST.DEV", "Windows Server 2022", False, True, dc=True)
+    db.add_host("127.0.0.2", "DC02", "OTHER.DEV", "Windows Server 2022", False, True, dc=True)
+    db.add_host("127.0.0.3", "WS01", "TEST.DEV", "Windows 11", False, True, dc=False)
+
+    all_dcs = db.get_domain_controllers()
+    assert len(all_dcs) == 2
+
+    test_dev_dcs = db.get_domain_controllers(domain="TEST.DEV")
+    assert len(test_dev_dcs) == 1
+    assert test_dev_dcs[0].hostname == "DC01"
 
 
 def test_is_share_valid():

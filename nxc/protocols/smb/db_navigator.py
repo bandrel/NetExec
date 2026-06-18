@@ -266,7 +266,9 @@ class navigator(DatabaseNavigator):
         else:
             hosts = self.db.get_hosts(filter_term=filter_term)
 
-            if len(hosts) > 1:
+            if len(hosts) == 0:
+                print(f"[!] No hosts found matching '{filter_term}'")
+            elif len(hosts) > 1:
                 self.display_hosts(hosts)
             elif len(hosts) == 1:
                 data = [

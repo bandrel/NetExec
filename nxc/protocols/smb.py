@@ -403,6 +403,7 @@ class smb(connection):
             self.conn.kerberosLogin(self.username, password, domain, lmhash, nthash, aesKey, kdcHost, useCache=useCache, TGS=tgs)
             if "Unix" not in self.server_os:
                 self.check_if_admin()
+                self.update_dc_status()
 
             if username == "":
                 self.username = self.conn.getCredentials()[0]
@@ -483,6 +484,7 @@ class smb(connection):
             self.logger.debug(f"{self.is_guest=}")
             if "Unix" not in self.server_os:
                 self.check_if_admin()
+                self.update_dc_status()
 
             # Only do database/bloodhound stuff if we don't have guest/null auth
             valid_auth = not self.is_guest and self.username
@@ -551,6 +553,7 @@ class smb(connection):
             self.logger.debug(f"{self.is_guest=}")
             if "Unix" not in self.server_os:
                 self.check_if_admin()
+                self.update_dc_status()
 
             # Only do database/bloodhound stuff if we don't have guest
             valid_auth = not self.is_guest and self.username and self.hash
@@ -765,6 +768,34 @@ class smb(connection):
                 pass
         # If 3 or more DC ports are open, likely a DC
         return open_ports >= 3
+
+    def is_dc_via_shares(self):
+        """Detect whether the target is a domain controller by checking for the SYSVOL and NETLOGON shares.
+
+        These two shares only exist on domain controllers and are readable by any authenticated domain
+        user, so this reuses the existing authenticated connection without any extra network probes.
+        """
+        for share in ("SYSVOL", "NETLOGON"):
+            try:
+                tid = self.conn.connectTree(share)
+                self.conn.disconnectTree(tid)
+            except Exception as e:
+                self.logger.debug(f"DC share check on {self.host}: could not connect to {share} ({e})")
+                return False
+        self.logger.debug(f"DC share check on {self.host}: SYSVOL and NETLOGON present, host is a DC")
+        return True
+
+    def update_dc_status(self):
+        """Detect DC status over the authenticated connection and persist it to the host record."""
+        # SYSVOL/NETLOGON require a real authenticated session; a guest session would yield a false negative
+        if "Unix" in self.server_os or self.is_guest:
+            return
+        self.isdc = self.is_dc_via_shares()
+        try:
+            host_id = self.db.get_hosts(self.host)[0].id
+            self.db.set_host_dc(host_id, self.isdc)
+        except Exception as e:
+            self.logger.debug(f"Could not persist DC status for {self.host}: {e}")
 
     def is_host_dc(self):
         if self.isdc is not None:
