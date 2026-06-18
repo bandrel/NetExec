@@ -140,7 +140,7 @@ class database(BaseDB):
         if password is not None:
             credential_data["password"] = password
         if pillaged_from is not None:
-            credential_data["pillaged_from"] = pillaged_from
+            credential_data["pillaged_from_hostid"] = pillaged_from
 
         q = select(self.UsersTable).filter(
             func.lower(self.UsersTable.c.domain) == func.lower(domain),
@@ -156,7 +156,7 @@ class database(BaseDB):
                 "domain": domain,
                 "username": username,
                 "password": password,
-                "pillaged_from": pillaged_from,
+                "pillaged_from_hostid": pillaged_from,
             }
             credentials = [new_cred]
         # update existing cred data
@@ -174,7 +174,7 @@ class database(BaseDB):
                 if password is not None:
                     cred_data["password"] = password
                 if pillaged_from is not None:
-                    cred_data["pillaged_from"] = pillaged_from
+                    cred_data["pillaged_from_hostid"] = pillaged_from
                 # only add cred to be updated if it has changed
                 if cred_data not in credentials:
                     credentials.append(cred_data)
@@ -286,10 +286,11 @@ class database(BaseDB):
 
     def is_credential_local(self, credential_id):
         q = select(self.UsersTable.c.domain).filter(self.UsersTable.c.id == credential_id)
-        user_domain = self.db_execute(q).all()
+        user_domain = self.db_execute(q).first()
 
         if user_domain:
-            q = select(self.HostsTable).filter(func.lower(self.HostsTable.c.id) == func.lower(user_domain))
+            # a credential is "local" if its domain matches a known host's name
+            q = select(self.HostsTable).filter(func.lower(self.HostsTable.c.hostname) == func.lower(user_domain[0]))
             results = self.db_execute(q).all()
 
             return len(results) > 0

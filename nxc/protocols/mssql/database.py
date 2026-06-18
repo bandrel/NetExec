@@ -143,7 +143,7 @@ class database(BaseDB):
         if password is not None:
             credential_data["password"] = password
         if pillaged_from is not None:
-            credential_data["pillaged_from"] = pillaged_from
+            credential_data["pillaged_from_hostid"] = pillaged_from
 
         q = select(self.UsersTable).filter(
             func.lower(self.UsersTable.c.domain) == func.lower(domain),
