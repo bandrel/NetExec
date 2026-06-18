@@ -1,55 +1,17 @@
-import os
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
-
-from nxc.database import delete_workspace, create_workspace
-from nxc.first_run import first_run_setup
-from nxc.loaders.protocolloader import ProtocolLoader
-from nxc.logger import NXCAdapter
-from nxc.paths import WORKSPACE_DIR
 from sqlalchemy.dialects.sqlite import Insert
 
 
-@pytest.fixture(scope="session")
-def db_engine():
-    db_path = os.path.join(WORKSPACE_DIR, "test/smb.db")
-    db_engine = create_engine(f"sqlite:///{db_path}", isolation_level="AUTOCOMMIT", future=True)
-    yield db_engine
-    db_engine.dispose()
-
-
-@pytest.fixture(scope="session")
-def db_setup(db_engine):
-    proto = "smb"
-    logger = NXCAdapter()
-    first_run_setup(logger)
-    p_loader = ProtocolLoader()
-    create_workspace("test", p_loader)
-
-    protocol_db_path = p_loader.get_protocols()[proto]["dbpath"]
-    protocol_db_object = p_loader.load_protocol(protocol_db_path).database
-
-    database_obj = protocol_db_object(db_engine)
-    database_obj.reflect_tables()
-    yield database_obj
-    database_obj.shutdown_db()
-    delete_workspace("test")
+@pytest.fixture
+def db(protocol_dbs):
+    dbo = protocol_dbs.db("smb")
+    yield dbo
+    dbo.clear_database()
 
 
 @pytest.fixture
-def db(db_setup):
-    yield db_setup
-    db_setup.clear_database()
-
-
-@pytest.fixture(scope="session")
-def sess(db_engine):
-    session_factory = sessionmaker(bind=db_engine, expire_on_commit=True)
-    Session = scoped_session(session_factory)
-    sess = Session()
-    yield sess
-    sess.close()
+def sess(protocol_dbs):
+    return protocol_dbs.session("smb")
 
 
 def test_add_host(db):
