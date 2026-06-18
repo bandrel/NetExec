@@ -130,17 +130,37 @@ def test_remove_credential(db):
 
 
 def test_add_admin_user(db):
-    db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
+    # add the host FIRST so its id differs from the user id (catches wrong-id pairing)
     db.add_host("127.0.0.1", "localhost", "TEST.DEV", "Windows Testing 2023", False, True)
+    db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
     host_id = db.get_hosts()[0].id
+    user_id = db.get_credentials()[0].id
 
     db.add_admin_user("plaintext", "TEST.DEV", "admin", "Passw0rd!", host_id)
     relations = db.get_admin_relations()
     assert len(relations) == 1
     assert relations[0].hostid == host_id
+    assert relations[0].userid == user_id
 
     # adding the same admin relation again does not duplicate
     db.add_admin_user("plaintext", "TEST.DEV", "admin", "Passw0rd!", host_id)
+    assert len(db.get_admin_relations()) == 1
+
+
+def test_add_admin_user_mismatched_counts(db):
+    # two hosts share the same ip-derived filter term but the cred matches one user;
+    # the count of matched users can differ from the count of matched hosts, which
+    # must not raise (no positional zip pairing)
+    db.add_host("127.0.0.1", "DC01", "TEST.DEV", "Windows Server 2022", False, True, dc=True)
+    db.add_host("127.0.0.2", "WS01", "TEST.DEV", "Windows 11", False, True)
+    db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
+
+    # filter_term "dc" matches one host, while the single user matches -> 1 user, 1 host
+    db.add_admin_user("plaintext", "TEST.DEV", "admin", "Passw0rd!", "dc")
+    assert len(db.get_admin_relations()) == 1
+
+    # passing a filter term that matches no hosts must not raise and adds nothing new
+    db.add_admin_user("plaintext", "TEST.DEV", "admin", "Passw0rd!", "no.such.host")
     assert len(db.get_admin_relations()) == 1
 
 
@@ -212,6 +232,11 @@ def test_get_credential(db):
     db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
     cred_id = db.get_user("TEST.DEV", "admin")[0].id
     assert db.get_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!") == cred_id
+
+
+def test_get_credential_missing_returns_none(db):
+    # looking up a credential that does not exist must return None, not crash
+    assert db.get_credential("plaintext", "TEST.DEV", "nobody", "nope") is None
 
 
 def test_is_credential_local(db):
@@ -571,6 +596,21 @@ def test_get_dpapi_secrets(db):
     by_winuser = db.get_dpapi_secrets(windows_user="winuser2")
     assert len(by_winuser) == 1
     assert by_winuser[0].windows_user == "winuser2"
+
+
+def test_get_dpapi_secrets_by_username(db):
+    # two secrets with distinct usernames; filtering by username must match on the
+    # username column (not windows_user)
+    db.add_dpapi_secrets("127.0.0.1", "CREDENTIAL", "winuser", "alice", "pass", "http://url")
+    db.add_dpapi_secrets("127.0.0.2", "CHROME", "winuser", "bob", "pass2", "http://url2")
+
+    by_username = db.get_dpapi_secrets(username="alice")
+    assert len(by_username) == 1
+    assert by_username[0].username == "alice"
+
+    by_username = db.get_dpapi_secrets(username="bob")
+    assert len(by_username) == 1
+    assert by_username[0].username == "bob"
 
 
 def test_add_loggedin_relation(db):

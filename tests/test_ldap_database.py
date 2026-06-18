@@ -124,6 +124,11 @@ def test_get_credential(db):
     assert db.get_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!") == cred_id
 
 
+def test_get_credential_missing_returns_none(db):
+    # get_credential for a non-existent credential returns None (no crash)
+    assert db.get_credential("plaintext", "NOPE.DEV", "ghost", "nope") is None
+
+
 def test_is_credential_valid(db):
     db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
     valid_id = db.get_credentials()[0].id

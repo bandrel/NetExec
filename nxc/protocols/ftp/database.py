@@ -108,7 +108,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q = Insert(self.HostsTable)  # .returning(self.HostsTable.c.id)
-        update_columns = {col.name: col for col in q.excluded if col.name not in "id"}
+        update_columns = {col.name: col for col in q.excluded if col.name != "id"}
         q = q.on_conflict_do_update(index_elements=self.HostsTable.primary_key, set_=update_columns)
 
         self.db_execute(q, hosts)  # .scalar()
@@ -148,7 +148,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q_users = Insert(self.CredentialsTable)  # .returning(self.CredentialsTable.c.id)
-        update_columns_users = {col.name: col for col in q_users.excluded if col.name not in "id"}
+        update_columns_users = {col.name: col for col in q_users.excluded if col.name != "id"}
         q_users = q_users.on_conflict_do_update(index_elements=self.CredentialsTable.primary_key,
                                                 set_=update_columns_users)
         nxc_logger.debug(f"Adding credentials: {credentials}")
@@ -176,8 +176,8 @@ class database(BaseDB):
 
     def get_credential(self, username, password):
         q = select(self.CredentialsTable).filter(
-            self.CredentialsTable.c.username == username,
-            self.CredentialsTable.c.password == password,
+            func.lower(self.CredentialsTable.c.username) == func.lower(username),
+            func.lower(self.CredentialsTable.c.password) == func.lower(password),
         )
         results = self.db_execute(q).first()
         if results is not None:
@@ -277,7 +277,7 @@ class database(BaseDB):
         q = delete(self.LoggedinRelationsTable)
         if cred_id:
             q = q.filter(self.LoggedinRelationsTable.c.credid == cred_id)
-        elif host_id:
+        if host_id:
             q = q.filter(self.LoggedinRelationsTable.c.hostid == host_id)
         self.db_execute(q)
 

@@ -129,6 +129,15 @@ def test_get_credential(db):
     assert db.get_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!") == cred_id
 
 
+def test_get_credential_missing_returns_none(db):
+    """get_credential() returns None (not a crash) when no credential matches."""
+    assert db.get_credential("plaintext", "TEST.DEV", "nobody", "nope") is None
+
+    # also None when there are credentials but none match the filter
+    db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
+    assert db.get_credential("plaintext", "TEST.DEV", "admin", "WrongPassword") is None
+
+
 def test_is_credential_valid(db):
     db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
     valid_id = db.get_credentials()[0].id
@@ -241,6 +250,55 @@ def test_add_admin_user_and_get_relations(db):
     assert len(db.get_admin_relations(user_id=user_id)) == 1
     assert len(db.get_admin_relations(host_id=host_id)) == 1
     assert len(db.get_admin_relations(user_id=9999)) == 0
+
+
+def test_add_admin_user_links_real_ids(db):
+    """The relation must reference the real host/user ids, not positionally zipped ids.
+
+    Seed an extra host first so the matched host's id (2) differs from the
+    matched user's id (1). A positional zip() would mispair them; correct nested
+    loops link by the actual matched rows.
+    """
+    # extra host taking id 1, so the credential's user id and target host id diverge
+    db.add_host("127.0.0.9", 5985, "OTHER", "TEST", "Windows Server 2022")
+    db.add_host("127.0.0.1", 5985, "DC01", "TEST", "Windows Server 2022")
+    db.add_credential("plaintext", "TEST", "admin", "Passw0rd!")
+
+    host_id = db.get_hosts(filter_term="DC01")[0].id
+    user_id = db.get_credentials()[0].id
+    assert host_id != user_id  # guard: ids genuinely differ
+
+    db.add_admin_user("plaintext", "TEST.DEV", "admin", "Passw0rd!", "127.0.0.1")
+
+    relations = db.get_admin_relations()
+    assert len(relations) == 1
+    assert relations[0].hostid == host_id
+    assert relations[0].userid == user_id
+
+
+def test_add_admin_user_mismatched_counts_no_valueerror(db):
+    """A single matching user against multiple matching hosts must not raise.
+
+    The legacy implementation used zip(users, hosts, strict=True), which raises
+    ValueError whenever the user count and host count differ. Here one user
+    matches but two hosts share the "TEST" domain, so a "domain TEST" host
+    filter returns two hosts versus one user. The nested-loop implementation
+    must link the user to both hosts without raising.
+    """
+    db.add_host("127.0.0.1", 5985, "DC01", "TEST", "Windows Server 2022")
+    db.add_host("127.0.0.2", 5985, "DC02", "TEST", "Windows Server 2022")
+    db.add_credential("plaintext", "TEST", "admin", "Passw0rd!")
+
+    user_id = db.get_credentials()[0].id
+    host_ids = sorted(h.id for h in db.get_hosts(filter_term="domain TEST"))
+    assert len(host_ids) == 2  # guard: two hosts, one user -> count mismatch
+
+    # Must not raise ValueError despite user count (1) != host count (2).
+    db.add_admin_user("plaintext", "TEST.DEV", "admin", "Passw0rd!", "domain TEST")
+
+    relations = db.get_admin_relations()
+    assert sorted(r.hostid for r in relations) == host_ids
+    assert all(r.userid == user_id for r in relations)
 
 
 def test_add_admin_user_no_duplicate(db):

@@ -99,6 +99,14 @@ def test_get_credential(db):
     assert db.get_credential("nobody", "nope") is None
 
 
+def test_get_credential_case_insensitive(db):
+    # add_credential dedups case-insensitively; get_credential must match the same way
+    cred_id = db.add_credential("User", "Pass")
+    assert cred_id is not None
+    assert db.get_credential("user", "pass") == cred_id
+    assert db.get_credential("USER", "PASS") == cred_id
+
+
 def test_get_credentials(db):
     db.add_credential("admin", "Passw0rd!")
     db.add_credential("svc", "Secret123")
@@ -267,6 +275,21 @@ def test_add_directory_listing(db):
 def test_get_directory_listing_empty(db):
     listings = db.get_directory_listing()
     assert listings == []
+
+
+def test_remove_loggedin_relations_by_cred_and_host(db):
+    db.add_host("127.0.0.1", 21, "220 ready")
+    db.add_host("127.0.0.2", 21, "220 other")
+    host_ids = [h.id for h in db.get_hosts()]
+    cred_id = db.add_credential("admin", "Passw0rd!")
+    db.add_loggedin_relation(cred_id, host_ids[0])
+    db.add_loggedin_relation(cred_id, host_ids[1])
+
+    # filtering by both cred_id and host_id should only remove the matching relation
+    db.remove_loggedin_relations(cred_id=cred_id, host_id=host_ids[0])
+    remaining = db.get_loggedin_relations()
+    assert len(remaining) == 1
+    assert remaining[0].hostid == host_ids[1]
 
 
 def test_remove_directory_listing(db):

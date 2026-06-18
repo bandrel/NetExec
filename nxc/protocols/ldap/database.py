@@ -96,7 +96,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q = Insert(self.HostsTable)  # .returning(self.HostsTable.c.id)
-        update_columns = {col.name: col for col in q.excluded if col.name not in "id"}
+        update_columns = {col.name: col for col in q.excluded if col.name != "id"}
         q = q.on_conflict_do_update(index_elements=self.HostsTable.primary_key, set_=update_columns)
 
         self.db_execute(q, hosts)  # .scalar()
@@ -108,7 +108,6 @@ class database(BaseDB):
     def add_credential(self, credtype, domain, username, password, pillaged_from=None):
         """Check if this credential has already been added to the database, if not add it in."""
         credentials = []
-        groups = []
 
         if pillaged_from and not self.is_host_valid(pillaged_from):
             nxc_logger.debug("Invalid host")
@@ -153,16 +152,11 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q_users = Insert(self.UsersTable)  # .returning(self.UsersTable.c.id)
-        update_columns_users = {col.name: col for col in q_users.excluded if col.name not in "id"}
+        update_columns_users = {col.name: col for col in q_users.excluded if col.name != "id"}
         q_users = q_users.on_conflict_do_update(index_elements=self.UsersTable.primary_key, set_=update_columns_users)
         nxc_logger.debug(f"Adding credentials: {credentials}")
 
         self.db_execute(q_users, credentials)  # .scalar()
-
-        if groups:
-            q_groups = Insert(self.GroupRelationsTable)
-
-            self.db_execute(q_groups, groups)
 
     def remove_credentials(self, creds_id):
         """Removes a credential ID from the database"""
@@ -202,7 +196,7 @@ class database(BaseDB):
             self.UsersTable.c.credtype == cred_type,
         )
         results = self.db_execute(q).first()
-        return results.id
+        return results.id if results else None
 
     def get_hosts(self, filter_term=None, domain=None):
         """Return hosts from the database."""
@@ -217,7 +211,7 @@ class database(BaseDB):
         elif filter_term is not None and filter_term.startswith("domain"):
             domain = filter_term.split()[1]
             like_term = func.lower(f"%{domain}%")
-            q = q.filter(self.HostsTable.c.domain.like(like_term))
+            q = q.filter(func.lower(self.HostsTable.c.domain).like(like_term))
         # if we're filtering by ip/hostname
         elif filter_term and filter_term != "":
             q = format_host_query(q, filter_term, self.HostsTable)

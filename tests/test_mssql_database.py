@@ -64,6 +64,13 @@ def test_get_hosts(db):
     assert by_host[0].hostname == "WS01"
 
 
+def test_get_hosts_dc_does_not_crash(db):
+    # mssql has no DC concept; "dc" should fall through to a normal search
+    # and return a list without raising (empty is fine).
+    result = db.get_hosts(filter_term="dc")
+    assert isinstance(result, list)
+
+
 # --------------------------------------------------------------------------- #
 # Credentials
 # --------------------------------------------------------------------------- #
@@ -118,6 +125,11 @@ def test_get_credential(db):
     assert db.get_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!") == cred_id
 
 
+def test_get_credential_missing_returns_none(db):
+    # No matching credential exists; should return None rather than crashing.
+    assert db.get_credential("plaintext", "TEST.DEV", "nope", "nope") is None
+
+
 def test_is_credential_valid(db):
     db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
     valid_id = db.get_credentials()[0].id
@@ -150,23 +162,34 @@ def test_remove_multiple_credentials(db):
 # Admin relations
 # --------------------------------------------------------------------------- #
 def test_add_admin_user_and_get_relations(db):
+    # Add an extra host FIRST so the target host's id differs from the user's id.
+    # This catches the cartesian-product bug where the wrong id was stored.
+    db.add_host("127.0.0.9", "DECOY", "TEST.DEV", "Windows Server 2022", 1)
     db.add_host("127.0.0.1", "DC01", "TEST.DEV", "Windows Server 2022", 1)
-    host_id = db.get_hosts()[0].id
+    host_id = db.get_hosts(filter_term="DC01")[0].id
     db.add_credential("plaintext", "TEST.DEV", "admin", "Passw0rd!")
     user_id = db.get_credentials()[0].id
+
+    # Sanity: ids must differ, otherwise the test can't detect a swapped id.
+    assert host_id != user_id
 
     db.add_admin_user("plaintext", "TEST.DEV", "admin", "Passw0rd!", "127.0.0.1")
 
     relations = db.get_admin_relations()
     assert len(relations) == 1
+    # The single relation must point at the REAL host id and REAL user id.
+    assert relations[0].hostid == host_id
+    assert relations[0].userid == user_id
 
     by_user = db.get_admin_relations(user_id=user_id)
     assert len(by_user) == 1
     assert by_user[0].userid == user_id
+    assert by_user[0].hostid == host_id
 
     by_host = db.get_admin_relations(host_id=host_id)
     assert len(by_host) == 1
     assert by_host[0].hostid == host_id
+    assert by_host[0].userid == user_id
 
 
 def test_add_admin_user_dedup(db):

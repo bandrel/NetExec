@@ -138,7 +138,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q = Insert(self.HostsTable)  # .returning(self.HostsTable.c.id)
-        update_columns = {col.name: col for col in q.excluded if col.name not in "id"}
+        update_columns = {col.name: col for col in q.excluded if col.name != "id"}
         q = q.on_conflict_do_update(index_elements=self.HostsTable.primary_key, set_=update_columns)
 
         self.db_execute(q, hosts)  # .scalar()
@@ -196,7 +196,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q_users = Insert(self.CredentialsTable)  # .returning(self.CredentialsTable.c.id)
-        update_columns_users = {col.name: col for col in q_users.excluded if col.name not in "id"}
+        update_columns_users = {col.name: col for col in q_users.excluded if col.name != "id"}
         q_users = q_users.on_conflict_do_update(index_elements=self.CredentialsTable.primary_key,
                                                 set_=update_columns_users)
         nxc_logger.debug(f"Adding credentials: {credentials}")
@@ -250,22 +250,24 @@ class database(BaseDB):
                 func.lower(self.CredentialsTable.c.username) == func.lower(username),
                 self.CredentialsTable.c.password == secret,
             )
-        creds = self.db_execute(creds_q)
+        creds = self.db_execute(creds_q).all()
         hosts = self.get_hosts(host_id)
 
         if creds and hosts:
-            for cred, host in zip(creds, hosts, strict=True):
-                cred_id = cred[0]
-                host_id = host[0]
-                link = {"credid": cred_id, "hostid": host_id}
-                admin_relations_select = select(self.AdminRelationsTable).filter(
-                    self.AdminRelationsTable.c.credid == cred_id,
-                    self.AdminRelationsTable.c.hostid == host_id,
-                )
-                links = self.db_execute(admin_relations_select).all()
+            nxc_logger.debug(f"creds: {creds}, hosts: {hosts}")
+            for cred in creds:
+                for host in hosts:
+                    cred_id = cred[0]
+                    host_id = host[0]
+                    link = {"credid": cred_id, "hostid": host_id}
+                    admin_relations_select = select(self.AdminRelationsTable).filter(
+                        self.AdminRelationsTable.c.credid == cred_id,
+                        self.AdminRelationsTable.c.hostid == host_id,
+                    )
+                    links = self.db_execute(admin_relations_select).all()
 
-                if not links:
-                    add_links.append(link)
+                    if not links:
+                        add_links.append(link)
 
         admin_relations_insert = Insert(self.AdminRelationsTable)
 

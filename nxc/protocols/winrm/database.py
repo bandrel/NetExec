@@ -122,25 +122,13 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q = Insert(self.HostsTable)
-        update_columns = {col.name: col for col in q.excluded if col.name not in "id"}
+        update_columns = {col.name: col for col in q.excluded if col.name != "id"}
         q = q.on_conflict_do_update(index_elements=["ip"], set_=update_columns)
         self.db_execute(q, hosts)
 
     def add_credential(self, credtype, domain, username, password, pillaged_from=None):
         """Check if this credential has already been added to the database, if not add it in."""
         credentials = []
-
-        credential_data = {}
-        if credtype is not None:
-            credential_data["credtype"] = credtype
-        if domain is not None:
-            credential_data["domain"] = domain
-        if username is not None:
-            credential_data["username"] = username
-        if password is not None:
-            credential_data["password"] = password
-        if pillaged_from is not None:
-            credential_data["pillaged_from_hostid"] = pillaged_from
 
         q = select(self.UsersTable).filter(
             func.lower(self.UsersTable.c.domain) == func.lower(domain),
@@ -181,7 +169,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q_users = Insert(self.UsersTable)  # .returning(self.UsersTable.c.id)
-        update_columns_users = {col.name: col for col in q_users.excluded if col.name not in "id"}
+        update_columns_users = {col.name: col for col in q_users.excluded if col.name != "id"}
         q_users = q_users.on_conflict_do_update(index_elements=self.UsersTable.primary_key, set_=update_columns_users)
         self.db_execute(q_users, credentials)  # .scalar()
 
@@ -203,22 +191,23 @@ class database(BaseDB):
                 func.lower(self.UsersTable.c.username) == func.lower(username),
                 self.UsersTable.c.password == password,
             )
-        users = self.db_execute(creds_q)
+        users = self.db_execute(creds_q).all()
         hosts = self.get_hosts(host)
 
         if users and hosts:
-            for user, host in zip(users, hosts, strict=True):
-                user_id = user[0]
-                host_id = host[0]
-                link = {"userid": user_id, "hostid": host_id}
-                admin_relations_select = select(self.AdminRelationsTable).filter(
-                    self.AdminRelationsTable.c.userid == user_id,
-                    self.AdminRelationsTable.c.hostid == host_id,
-                )
-                links = self.db_execute(admin_relations_select).all()
+            for user in users:
+                for host in hosts:
+                    user_id = user[0]
+                    host_id = host[0]
+                    link = {"userid": user_id, "hostid": host_id}
+                    admin_relations_select = select(self.AdminRelationsTable).filter(
+                        self.AdminRelationsTable.c.userid == user_id,
+                        self.AdminRelationsTable.c.hostid == host_id,
+                    )
+                    links = self.db_execute(admin_relations_select).all()
 
-                if not links:
-                    add_links.append(link)
+                    if not links:
+                        add_links.append(link)
 
         admin_relations_insert = Insert(self.AdminRelationsTable)
 
@@ -279,7 +268,7 @@ class database(BaseDB):
             self.UsersTable.c.credtype == cred_type,
         )
         results = self.db_execute(q).first()
-        return results.id
+        return results.id if results else None
 
     def is_credential_local(self, credential_id):
         q = select(self.UsersTable.c.domain).filter(self.UsersTable.c.id == credential_id)
@@ -312,7 +301,7 @@ class database(BaseDB):
         elif filter_term is not None and filter_term.startswith("domain"):
             domain = filter_term.split()[1]
             like_term = func.lower(f"%{domain}%")
-            q = q.filter(self.HostsTable.c.domain.like(like_term))
+            q = q.filter(func.lower(self.HostsTable.c.domain).like(like_term))
         # if we're filtering by ip/hostname
         elif filter_term and filter_term != "":
             q = format_host_query(q, filter_term, self.HostsTable)

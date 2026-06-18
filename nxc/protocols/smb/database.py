@@ -274,7 +274,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q = Insert(self.HostsTable)  # .returning(self.HostsTable.c.id)
-        update_columns = {col.name: col for col in q.excluded if col.name not in "id"}
+        update_columns = {col.name: col for col in q.excluded if col.name != "id"}
         q = q.on_conflict_do_update(index_elements=["ip"], set_=update_columns)
 
         self.db_execute(q, hosts)  # .scalar()
@@ -333,7 +333,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q_users = Insert(self.UsersTable)  # .returning(self.UsersTable.c.id)
-        update_columns_users = {col.name: col for col in q_users.excluded if col.name not in "id"}
+        update_columns_users = {col.name: col for col in q_users.excluded if col.name != "id"}
         q_users = q_users.on_conflict_do_update(index_elements=self.UsersTable.primary_key, set_=update_columns_users)
         nxc_logger.debug(f"Adding credentials: {credentials}")
 
@@ -367,23 +367,24 @@ class database(BaseDB):
             func.lower(self.UsersTable.c.domain) == func.lower(domain),
             func.lower(self.UsersTable.c.username) == func.lower(username),
             self.UsersTable.c.password == password)
-        users = self.db_execute(creds_q)
+        users = self.db_execute(creds_q).all()
         hosts = self.get_hosts(host)
 
         if users and hosts:
             nxc_logger.debug(f"users: {users}, hosts: {hosts}")
-            for user, host in zip(users, hosts, strict=True):
-                user_id = user[0]
-                host_id = host[0]
-                link = {"userid": user_id, "hostid": host_id}
-                admin_relations_select = select(self.AdminRelationsTable).filter(
-                    self.AdminRelationsTable.c.userid == user_id,
-                    self.AdminRelationsTable.c.hostid == host_id,
-                )
-                links = self.db_execute(admin_relations_select).all()
+            for user in users:
+                for host in hosts:
+                    user_id = user[0]
+                    host_id = host[0]
+                    link = {"userid": user_id, "hostid": host_id}
+                    admin_relations_select = select(self.AdminRelationsTable).filter(
+                        self.AdminRelationsTable.c.userid == user_id,
+                        self.AdminRelationsTable.c.hostid == host_id,
+                    )
+                    links = self.db_execute(admin_relations_select).all()
 
-                if not links:
-                    add_links.append(link)
+                    if not links:
+                        add_links.append(link)
 
         admin_relations_insert = Insert(self.AdminRelationsTable)
 
@@ -444,7 +445,7 @@ class database(BaseDB):
             self.UsersTable.c.credtype == cred_type,
         )
         results = self.db_execute(q).first()
-        return results.id
+        return results.id if results else None
 
     def is_credential_local(self, credential_id):
         q = select(self.UsersTable.c.domain).filter(self.UsersTable.c.id == credential_id)
@@ -489,7 +490,7 @@ class database(BaseDB):
         elif filter_term is not None and filter_term.startswith("domain"):
             domain = filter_term.split()[1]
             like_term = func.lower(f"%{domain}%")
-            q = q.filter(self.HostsTable.c.domain.like(like_term))
+            q = q.filter(func.lower(self.HostsTable.c.domain).like(like_term))
         # if we're filtering by ip/hostname
         elif filter_term and filter_term != "":
             q = format_host_query(q, filter_term, self.HostsTable)
@@ -561,7 +562,7 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q = Insert(self.GroupsTable)  # .returning(self.GroupsTable.c.id)
-        update_columns = {col.name: col for col in q.excluded if col.name not in "id"}
+        update_columns = {col.name: col for col in q.excluded if col.name != "id"}
         q = q.on_conflict_do_update(index_elements=self.GroupsTable.primary_key, set_=update_columns)
 
         self.db_execute(q, groups)
@@ -585,7 +586,7 @@ class database(BaseDB):
             )
         elif filter_term and filter_term != "":
             like_term = func.lower(f"%{filter_term}%")
-            q = select(self.GroupsTable).filter(self.GroupsTable.c.name.like(like_term))
+            q = select(self.GroupsTable).filter(func.lower(self.GroupsTable.c.name).like(like_term))
         else:
             q = select(self.GroupsTable).filter()
 
@@ -675,7 +676,7 @@ class database(BaseDB):
             q = select(self.SharesTable).filter(self.SharesTable.c.id == filter_term)
         elif filter_term:
             like_term = func.lower(f"%{filter_term}%")
-            q = select(self.SharesTable).filter(self.SharesTable.c.name.like(like_term))
+            q = select(self.SharesTable).filter(func.lower(self.SharesTable.c.name).like(like_term))
         else:
             q = select(self.SharesTable)
         return self.db_execute(q).all()
@@ -803,7 +804,7 @@ class database(BaseDB):
             q = q.filter(func.lower(self.DpapiSecretsTable.c.windows_user).like(like_term))
         elif username:
             like_term = func.lower(f"%{username}%")
-            q = q.filter(func.lower(self.DpapiSecretsTable.c.windows_user).like(like_term))
+            q = q.filter(func.lower(self.DpapiSecretsTable.c.username).like(like_term))
         elif url:
             q = q.filter(func.lower(self.DpapiSecretsTable.c.url) == func.lower(url))
         results = self.db_execute(q).all()
@@ -885,7 +886,7 @@ class database(BaseDB):
         nxc_logger.debug(f"Update data: {results}")
         # TODO: find a way to abstract this away to a single Upsert call
         q = Insert(table)  # .returning(table.c.id)
-        update_column = {col.name: col for col in q.excluded if col.name not in "id"}
+        update_column = {col.name: col for col in q.excluded if col.name != "id"}
         q = q.on_conflict_do_update(index_elements=table.primary_key, set_=update_column)
         self.db_execute(q, results)  # .scalar()
         # we only return updated IDs for now - when RETURNING clause is allowed we can return inserted

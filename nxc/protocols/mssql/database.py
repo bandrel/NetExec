@@ -19,6 +19,7 @@ class database(BaseDB):
         self.HostsTable = None
         self.UsersTable = None
         self.AdminRelationsTable = None
+        self.LoggedinRelationsTable = None
 
         super().__init__(db_engine)
 
@@ -127,24 +128,12 @@ class database(BaseDB):
 
         # TODO: find a way to abstract this away to a single Upsert call
         q = Insert(self.HostsTable)
-        update_columns = {col.name: col for col in q.excluded if col.name not in "id"}
+        update_columns = {col.name: col for col in q.excluded if col.name != "id"}
         q = q.on_conflict_do_update(index_elements=self.HostsTable.primary_key, set_=update_columns)
         self.db_execute(q, hosts)
 
     def add_credential(self, credtype, domain, username, password, pillaged_from=None):
         """Check if this credential has already been added to the database, if not add it in."""
-        credential_data = {}
-        if credtype is not None:
-            credential_data["credtype"] = credtype
-        if domain is not None:
-            credential_data["domain"] = domain
-        if username is not None:
-            credential_data["username"] = username
-        if password is not None:
-            credential_data["password"] = password
-        if pillaged_from is not None:
-            credential_data["pillaged_from_hostid"] = pillaged_from
-
         q = select(self.UsersTable).filter(
             func.lower(self.UsersTable.c.domain) == func.lower(domain),
             func.lower(self.UsersTable.c.username) == func.lower(username),
@@ -177,7 +166,7 @@ class database(BaseDB):
                     cred_data["pillaged_from_hostid"] = pillaged_from
 
                 q = Insert(self.UsersTable)
-                update_columns = {col.name: col for col in q.excluded if col.name not in "id"}
+                update_columns = {col.name: col for col in q.excluded if col.name != "id"}
                 q = q.on_conflict_do_update(index_elements=self.UsersTable.primary_key, set_=update_columns)
                 self.db_execute(q, [cred_data])
 
@@ -189,37 +178,33 @@ class database(BaseDB):
 
     def add_admin_user(self, credtype, domain, username, password, host, user_id=None):
         if user_id:
-            q = select(self.UsersTable).filter(self.UsersTable.c.id == user_id)
-            users = self.db_execute(q).all()
+            creds_q = select(self.UsersTable).filter(self.UsersTable.c.id == user_id)
         else:
-            q = select(self.UsersTable).filter(
+            creds_q = select(self.UsersTable).filter(
                 self.UsersTable.c.credtype == credtype,
                 func.lower(self.UsersTable.c.domain) == func.lower(domain),
                 func.lower(self.UsersTable.c.username) == func.lower(username),
                 self.UsersTable.c.password == password,
             )
-            users = self.db_execute(q).all()
-        nxc_logger.debug(f"Users: {users}")
+        users = self.db_execute(creds_q).all()
+        hosts = self.get_hosts(host)
+        nxc_logger.debug(f"Users: {users}, Hosts: {hosts}")
 
-        like_term = func.lower(f"%{host}%")
-        q = q.filter(self.HostsTable.c.ip.like(like_term))
-        hosts = self.db_execute(q).all()
-        nxc_logger.debug(f"Hosts: {hosts}")
+        if users and hosts:
+            for user in users:
+                for host_row in hosts:
+                    user_id = user[0]
+                    host_id = host_row[0]
+                    link = {"userid": user_id, "hostid": host_id}
 
-        if users is not None and hosts is not None:
-            for user, host in zip(users, hosts, strict=True):
-                user_id = user[0]
-                host_id = host[0]
-                link = {"userid": user_id, "hostid": host_id}
+                    relation_q = select(self.AdminRelationsTable).filter(
+                        self.AdminRelationsTable.c.userid == user_id,
+                        self.AdminRelationsTable.c.hostid == host_id,
+                    )
+                    links = self.db_execute(relation_q).all()
 
-                q = select(self.AdminRelationsTable).filter(
-                    self.AdminRelationsTable.c.userid == user_id,
-                    self.AdminRelationsTable.c.hostid == host_id,
-                )
-                links = self.db_execute(q).all()
-
-                if not links:
-                    self.db_execute(insert(self.AdminRelationsTable).values(link))
+                    if not links:
+                        self.db_execute(insert(self.AdminRelationsTable).values(link))
 
     def get_admin_relations(self, user_id=None, host_id=None):
         if user_id:
@@ -275,7 +260,7 @@ class database(BaseDB):
             self.UsersTable.c.credtype == cred_type,
         )
         results = self.db_execute(q).first()
-        return results.id
+        return results.id if results else None
 
     def is_host_valid(self, host_id):
         """Check if this host ID is valid."""
@@ -293,11 +278,6 @@ class database(BaseDB):
             results = self.db_execute(q).first()
             # all() returns a list, so we keep the return format the same so consumers don't have to guess
             return [results]
-        # if we're filtering by domain controllers
-        elif filter_term == "dc":
-            q = q.filter(self.HostsTable.c.dc is True)
-            if domain:
-                q = q.filter(func.lower(self.HostsTable.c.domain) == func.lower(domain))
         # if we're filtering by ip/hostname
         elif filter_term and filter_term != "":
             q = format_host_query(q, filter_term, self.HostsTable)

@@ -244,15 +244,40 @@ def test_get_user(db):
 # admin relations
 # ---------------------------------------------------------------------------
 def test_add_admin_user_and_get_relations(db):
+    # add a host FIRST so the host id is offset from the cred id; this catches a
+    # positional zip() pairing bug where cred/host would be matched by index
+    # rather than by their real ids.
     db.add_host("127.0.0.1", 22, "banner", "os")
-    host_id = db.get_hosts()[0].id
+    db.add_host("127.0.0.2", 22, "banner", "os")
+    host_id = db.get_hosts(filter_term="127.0.0.2")[0].id
     cred_id = db.add_credential("plaintext", "root", "toor")
+    # the relation must reference the real ids, not positionally-zipped ones
+    assert host_id != cred_id
 
     db.add_admin_user("plaintext", "root", "toor", host_id=host_id)
     relations = db.get_admin_relations()
     assert len(relations) == 1
     assert relations[0].credid == cred_id
     assert relations[0].hostid == host_id
+
+
+def test_add_admin_user_no_error_on_count_mismatch(db):
+    # Multiple hosts but a single matching credential: the old zip(strict=True)
+    # raised ValueError on unequal lengths. The fix uses nested loops, so this
+    # must succeed and create one admin relation per host (cartesian product).
+    db.add_host("127.0.0.1", 22, "banner", "os")
+    db.add_host("127.0.0.2", 22, "banner", "os")
+    cred_id = db.add_credential("plaintext", "root", "toor")
+    host1 = db.get_hosts(filter_term="127.0.0.1")[0].id
+    host2 = db.get_hosts(filter_term="127.0.0.2")[0].id
+
+    # no host_id filter -> all hosts returned; one cred matches
+    db.add_admin_user("plaintext", "root", "toor")
+
+    relations = db.get_admin_relations()
+    assert len(relations) == 2
+    assert {r.hostid for r in relations} == {host1, host2}
+    assert all(r.credid == cred_id for r in relations)
 
 
 def test_add_admin_user_deduplicates(db):

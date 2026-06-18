@@ -93,7 +93,11 @@ def create_workspace(workspace_name, p_loader=None):
 
 
 def delete_workspace(workspace_name):
-    shutil.rmtree(path_join(WORKSPACE_DIR, workspace_name))
+    workspace_path = path_join(WORKSPACE_DIR, workspace_name)
+    if not workspace_name or not exists(workspace_path):
+        nxc_logger.debug(f"Workspace {workspace_name} does not exist, nothing to delete")
+        return
+    shutil.rmtree(workspace_path)
     print(f"[*] Workspace {workspace_name} deleted")
 
 
@@ -130,8 +134,9 @@ def format_host_query(q, filter_term, HostsTable):
         nxc_logger.debug(f"filter_term is not an IP address: {filter_term}")
         like_term = func.lower(f"%{filter_term}%")
 
+        # lower both the column and the pattern so the search is genuinely case-insensitive
         # check if the hostname column exists for hostname searching
-        q = q.filter(ip_column.like(like_term) | func.lower(HostsTable.c.hostname).like(like_term)) if hasattr(HostsTable.c, "hostname") else q.filter(ip_column.like(like_term))
+        q = q.filter(func.lower(ip_column).like(like_term) | func.lower(HostsTable.c.hostname).like(like_term)) if hasattr(HostsTable.c, "hostname") else q.filter(func.lower(ip_column).like(like_term))
 
     return q
 
@@ -205,6 +210,7 @@ class BaseDB:
 
     def db_execute(self, *args):
         self.lock.acquire()
-        res = self.sess.execute(*args)
-        self.lock.release()
-        return res
+        try:
+            return self.sess.execute(*args)
+        finally:
+            self.lock.release()
