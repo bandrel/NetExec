@@ -10,6 +10,12 @@ from nxc.protocols.smb.remotefile import RemoteFile
 from impacket.smb3structs import FILE_READ_DATA
 from impacket.smbconnection import SessionError
 from impacket.nmb import NetBIOSTimeout
+from nxc.helpers.ntsecuritydescriptor import (
+    SIDResolver,
+    fetch_security_descriptor,
+    security_descriptor_to_dict,
+    make_lsa_lookup,
+)
 
 
 CHUNK_SIZE = 4096
@@ -64,6 +70,8 @@ class SMBSpiderPlus:
         exclude_filter,
         max_file_size,
         output_folder,
+        read_sd=False,
+        resolve_sids=True,
     ):
         self.smb = smb
         self.host = self.smb.conn.getRemoteHost()
@@ -92,6 +100,11 @@ class SMBSpiderPlus:
         self.exclude_exts = exclude_exts
         self.max_file_size = max_file_size
         self.output_folder = output_folder
+        self.read_sd = read_sd
+        self.resolve_sids = resolve_sids
+        self.resolver = None
+        self.lsa_rpc = None
+        self._tree_ids = {}
 
         # Make sure the output_folder exists
         make_dirs(self.output_folder)
@@ -180,10 +193,41 @@ class SMBSpiderPlus:
         self.logger.debug(f"Resolved path: {resolved}")
         return str(resolved.parent), resolved.name
 
+    def _get_tree_id(self, share_name):
+        """Connect a tree for the share once and cache the id (used for SD reads)."""
+        if share_name not in self._tree_ids:
+            self._tree_ids[share_name] = self.smb.conn.connectTree(share_name)
+        return self._tree_ids[share_name]
+
+    def _read_sd(self, share_name, path):
+        """Fetch + serialize the SD for a share path. Returns a dict or {"error": ...}.
+
+        `path` uses forward slashes internally (spider convention); convert to the
+        backslash form SMB expects.
+        """
+        smb_path = path.replace("/", "\\").strip("\\")
+        try:
+            tree_id = self._get_tree_id(share_name)
+            sd = fetch_security_descriptor(self.smb, tree_id, smb_path)
+        except SessionError as e:
+            msg = str(e)
+            for status in ("STATUS_ACCESS_DENIED", "STATUS_OBJECT_NAME_NOT_FOUND", "STATUS_OBJECT_PATH_NOT_FOUND"):
+                if status in msg:
+                    return {"error": status}
+            self.logger.debug(f'SD fetch failed for "{share_name}\\{smb_path}": {e}')
+            return {"error": "unknown"}
+        return security_descriptor_to_dict(sd, self.resolver)
+
     def spider_shares(self):
         """Enumerates all available shares for the SMB connection, spiders through the readable shares, and saves the metadata of the shares to a JSON file"""
         self.logger.info("Enumerating shares for spidering.")
         shares = self.smb.shares()
+
+        if self.read_sd:
+            lookup = None
+            if self.resolve_sids:
+                lookup, self.lsa_rpc = make_lsa_lookup(self.smb)
+            self.resolver = SIDResolver(lookup_func=lookup)
 
         try:
             # Get all available shares for the SMB connection
@@ -211,6 +255,8 @@ class SMBSpiderPlus:
                 try:
                     # Start the spider at the root of the share folder
                     self.results[share_name] = {}
+                    if self.read_sd:
+                        self.results[share_name][""] = {"security": self._read_sd(share_name, "")}
                     self.spider_folder(share_name, "")
                 except (SessionError, NetBIOSTimeout) as e:
                     self.logger.exception(e)
@@ -220,6 +266,9 @@ class SMBSpiderPlus:
         except Exception as e:
             self.logger.exception(e)
             self.logger.fail(f"Error enumerating shares: {e!s}")
+        finally:
+            if self.lsa_rpc is not None:
+                self.lsa_rpc.disconnect()
 
         # Save the metadata.
         self.dump_folder_metadata(self.results)
@@ -258,6 +307,8 @@ class SMBSpiderPlus:
 
             if result_type == "folder":
                 self.logger.info(f'Current folder in share "{share_name}": "{next_fullpath}"')
+                if self.read_sd:
+                    self.results[share_name][next_fullpath] = {"security": self._read_sd(share_name, next_fullpath)}
                 self.spider_folder(share_name, next_fullpath + "/")
             else:
                 self.logger.info(f'Current file in share "{share_name}": "{next_fullpath}"')
@@ -277,6 +328,8 @@ class SMBSpiderPlus:
             "atime_epoch": human_time(file_access_time),
         }
         self.stats["file_sizes"].append(file_size)
+        if self.read_sd:
+            self.results[share_name][file_path]["security"] = self._read_sd(share_name, file_path)
 
         # Check if proceeding with download attempt.
         if not self.download_flag:
@@ -485,6 +538,8 @@ class NXCModule:
         EXCLUDE_FILTER    Case-insensitive filter to exclude folders/files (Default: print$,ipc$)
         MAX_FILE_SIZE     Max file size to download (Default: 51200)
         OUTPUT_FOLDER     Path of the local folder to save files (Default: NXC_PATH/nxc_spider_plus)
+        READ_SD           Record the security descriptor (owner/group/DACL) of each file and folder (Default: False)
+        RESOLVE_SIDS      Resolve SIDs to names via LSARPC when READ_SD is enabled (Default: True)
         """
         self.download_flag = False
         if any("DOWNLOAD" in key for key in module_options):
@@ -498,6 +553,10 @@ class NXCModule:
         self.exclude_filter = [d.lower() for d in self.exclude_filter]  # force case-insensitive
         self.max_file_size = int(module_options.get("MAX_FILE_SIZE", 50 * 1024))
         self.output_folder = module_options.get("OUTPUT_FOLDER", abspath(join(NXC_PATH, "modules/nxc_spider_plus")))
+        self.read_sd = False
+        if any("READ_SD" in key for key in module_options):
+            self.read_sd = module_options.get("READ_SD", "false").lower() in ("true", "1", "yes")
+        self.resolve_sids = module_options.get("RESOLVE_SIDS", "true").lower() in ("true", "1", "yes")
 
     def on_login(self, context, connection):
         context.log.display("Started module spidering_plus with the following options:")
@@ -507,6 +566,8 @@ class NXCModule:
         context.log.display(f"  EXCLUDE_EXTS: {self.exclude_exts}")
         context.log.display(f" MAX_FILE_SIZE: {human_size(self.max_file_size)}")
         context.log.display(f" OUTPUT_FOLDER: {self.output_folder}")
+        context.log.display(f"       READ_SD: {self.read_sd}")
+        context.log.display(f"  RESOLVE_SIDS: {self.resolve_sids}")
 
         spider = SMBSpiderPlus(
             connection,
@@ -517,6 +578,8 @@ class NXCModule:
             self.exclude_filter,
             self.max_file_size,
             self.output_folder,
+            self.read_sd,
+            self.resolve_sids,
         )
 
         spider.spider_shares()
