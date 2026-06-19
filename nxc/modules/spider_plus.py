@@ -1,3 +1,4 @@
+import contextlib
 import json
 import errno
 from os.path import abspath, join, exists, splitext, getsize
@@ -199,7 +200,7 @@ class SMBSpiderPlus:
             self._tree_ids[share_name] = self.smb.conn.connectTree(share_name)
         return self._tree_ids[share_name]
 
-    def _read_sd(self, share_name, path):
+    def _read_sd(self, share_name, path, is_dir=False):
         """Fetch + serialize the SD for a share path. Returns a dict or {"error": ...}.
 
         `path` uses forward slashes internally (spider convention); convert to the
@@ -208,13 +209,16 @@ class SMBSpiderPlus:
         smb_path = path.replace("/", "\\").strip("\\")
         try:
             tree_id = self._get_tree_id(share_name)
-            sd = fetch_security_descriptor(self.smb, tree_id, smb_path)
+            sd = fetch_security_descriptor(self.smb, tree_id, smb_path, is_dir=is_dir)
         except SessionError as e:
             msg = str(e)
             for status in ("STATUS_ACCESS_DENIED", "STATUS_OBJECT_NAME_NOT_FOUND", "STATUS_OBJECT_PATH_NOT_FOUND"):
                 if status in msg:
                     return {"error": status}
             self.logger.debug(f'SD fetch failed for "{share_name}\\{smb_path}": {e}')
+            return {"error": "unknown"}
+        except Exception as e:
+            self.logger.debug(f'SD fetch error for "{share_name}\\{smb_path}": {e}')
             return {"error": "unknown"}
         return security_descriptor_to_dict(sd, self.resolver)
 
@@ -256,7 +260,7 @@ class SMBSpiderPlus:
                     # Start the spider at the root of the share folder
                     self.results[share_name] = {}
                     if self.read_sd:
-                        self.results[share_name][""] = {"security": self._read_sd(share_name, "")}
+                        self.results[share_name][""] = {"security": self._read_sd(share_name, "", is_dir=True)}
                     self.spider_folder(share_name, "")
                 except (SessionError, NetBIOSTimeout) as e:
                     self.logger.exception(e)
@@ -267,6 +271,10 @@ class SMBSpiderPlus:
             self.logger.exception(e)
             self.logger.fail(f"Error enumerating shares: {e!s}")
         finally:
+            for tid in self._tree_ids.values():
+                with contextlib.suppress(Exception):
+                    self.smb.conn.disconnectTree(tid)
+            self._tree_ids.clear()
             if self.lsa_rpc is not None:
                 self.lsa_rpc.disconnect()
 
@@ -308,7 +316,7 @@ class SMBSpiderPlus:
             if result_type == "folder":
                 self.logger.info(f'Current folder in share "{share_name}": "{next_fullpath}"')
                 if self.read_sd:
-                    self.results[share_name][next_fullpath] = {"security": self._read_sd(share_name, next_fullpath)}
+                    self.results[share_name][next_fullpath] = {"security": self._read_sd(share_name, next_fullpath, is_dir=True)}
                 self.spider_folder(share_name, next_fullpath + "/")
             else:
                 self.logger.info(f'Current file in share "{share_name}": "{next_fullpath}"')

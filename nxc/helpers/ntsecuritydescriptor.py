@@ -6,6 +6,7 @@ from impacket.smb3structs import (
     GENERIC_ALL, GENERIC_READ, GENERIC_WRITE, GENERIC_EXECUTE,
     SMB2_0_INFO_SECURITY, OWNER_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION,
     DACL_SECURITY_INFORMATION, FILE_SHARE_READ, FILE_OPEN,
+    FILE_DIRECTORY_FILE, FILE_SYNCHRONOUS_IO_NONALERT,
 )
 from impacket.dcerpc.v5 import lsat, lsad
 from impacket.dcerpc.v5.dtypes import MAXIMUM_ALLOWED
@@ -203,19 +204,23 @@ def render_security_descriptor(sd, resolver):
     return lines
 
 
-def fetch_security_descriptor(connection, tree_id, path):
+def fetch_security_descriptor(connection, tree_id, path, is_dir=False):
     """Open `path` on `tree_id`, query its security descriptor, close, return parsed SD.
 
     `connection` is an NXC connection (uses connection.conn.getSMBServer()).
     An empty `path` ("") targets the share root directory (standard SMB2 behavior).
+    When `is_dir` is True, the path is opened with directory creation options
+    (FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT), matching how the share
+    root is opened in nxc/protocols/smb.py; files use no creation options.
     Raises impacket SessionError on failure (caller decides how to record it).
     """
     smb = connection.conn.getSMBServer()
+    creation_options = (FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT) if is_dir else 0
     file_id = smb.create(
         tree_id, path,
         desiredAccess=READ_CONTROL,
         shareMode=FILE_SHARE_READ,
-        creationOptions=0,
+        creationOptions=creation_options,
         creationDisposition=FILE_OPEN,
         fileAttributes=0,
     )
@@ -283,7 +288,7 @@ def make_lsa_lookup(connection):
         domains = res["ReferencedDomains"]["Domains"]
         name = translated["Name"]
         dom_index = translated["DomainIndex"]
-        if dom_index >= 0 and name:
+        if 0 <= dom_index < len(domains) and name:
             domain = domains[dom_index]["Name"]
             return f"{domain}\\{name}" if domain else name
         return name or None
