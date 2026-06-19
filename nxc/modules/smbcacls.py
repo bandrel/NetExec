@@ -9,10 +9,12 @@ from impacket.smb3structs import (
     FILE_SHARE_READ,
     FILE_OPEN,
 )
-from impacket.dcerpc.v5 import transport, lsat, lsad
+from impacket.dcerpc.v5 import lsat, lsad
 from impacket.dcerpc.v5.dtypes import MAXIMUM_ALLOWED
+from impacket.dcerpc.v5.rpcrt import DCERPCException
 
 from nxc.helpers.misc import CATEGORY
+from nxc.helpers.rpc import NXCRPCConnection
 from nxc.helpers.ntsecuritydescriptor import SIDResolver, render_security_descriptor
 
 
@@ -27,6 +29,12 @@ class NXCModule:
     supported_protocols = ["smb"]
     category = CATEGORY.ENUMERATION
 
+    def __init__(self):
+        self.share = None
+        self.path = ""
+        self.recurse = False
+        self.resolve_sids = True
+
     def options(self, context, module_options):
         """
         SHARE         Share to read from (required), e.g. C$
@@ -40,22 +48,25 @@ class NXCModule:
         self.resolve_sids = module_options.get("RESOLVE_SIDS", "true").lower() in ("true", "1", "yes")
 
     def _make_lsa_lookup(self, context, connection):
-        """Return a lookup_func(sid)->name backed by LSARPC, or None if unavailable."""
+        """Return (lookup_func(sid)->name, rpc) backed by LSARPC, or (None, None) if unavailable.
+
+        The caller is responsible for calling rpc.disconnect() when done.
+        """
         try:
-            rpctransport = transport.SMBTransport(
-                connection.conn.getRemoteHost(),
-                445, r"\lsarpc", smb_connection=connection.conn,
-            )
-            dce = rpctransport.get_dce_rpc()
-            dce.connect()
-            dce.bind(lsat.MSRPC_UUID_LSAT)
+            rpc = NXCRPCConnection(connection)
+            dce = rpc.connect(r"\lsarpc", lsat.MSRPC_UUID_LSAT)
             policy = lsad.hLsarOpenPolicy2(dce, MAXIMUM_ALLOWED | lsat.POLICY_LOOKUP_NAMES)["PolicyHandle"]
         except Exception as e:
             context.log.debug(f"LSARPC unavailable, SIDs will not be resolved: {e}")
-            return None
+            return None, None
 
         def lookup(sid):
-            res = lsat.hLsarLookupSids(dce, policy, [sid], lsat.LSAP_LOOKUP_LEVEL.LsapLookupWksta)
+            try:
+                res = lsat.hLsarLookupSids(dce, policy, [sid], lsat.LSAP_LOOKUP_LEVEL.LsapLookupWksta)
+            except DCERPCException:
+                # SID could not be mapped (e.g. STATUS_NONE_MAPPED for an orphaned SID).
+                # Return None so the resolver caches the raw SID and keeps resolving others.
+                return None
             translated = res["TranslatedNames"]["Names"][0]
             domains = res["ReferencedDomains"]["Domains"]
             name = translated["Name"]
@@ -65,11 +76,12 @@ class NXCModule:
                 return f"{domain}\\{name}" if domain else name
             return name or None
 
-        return lookup
+        return lookup, rpc
 
     def _get_security_descriptor(self, connection, tree_id, path):
         """Open `path`, query its security descriptor, close, and return parsed SD."""
         smb = connection.conn.getSMBServer()
+        # An empty path ("") opens the share root directory (standard SMB2 behavior).
         file_id = smb.create(
             tree_id, path,
             desiredAccess=READ_CONTROL,
@@ -122,15 +134,19 @@ class NXCModule:
             context.log.fail("smbcacls requires SMB2 or later (server negotiated SMB1)")
             return
 
-        lookup = self._make_lsa_lookup(context, connection) if self.resolve_sids else None
+        if self.resolve_sids:
+            lookup, rpc = self._make_lsa_lookup(context, connection)
+        else:
+            lookup, rpc = None, None
         resolver = SIDResolver(lookup_func=lookup)
 
-        if not self.recurse:
+        try:
             self._print_path(context, connection, tree_id, resolver, self.path)
-            return
-
-        self._print_path(context, connection, tree_id, resolver, self.path)
-        self._walk(context, connection, tree_id, resolver, self.path)
+            if self.recurse:
+                self._walk(context, connection, tree_id, resolver, self.path)
+        finally:
+            if rpc is not None:
+                rpc.disconnect()
 
     def _walk(self, context, connection, tree_id, resolver, folder):
         listing_path = (folder + "\\*") if folder else "*"
