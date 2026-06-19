@@ -1,3 +1,4 @@
+from impacket.ldap import ldaptypes
 from impacket.smb3structs import (
     FILE_READ_DATA, FILE_WRITE_DATA, FILE_APPEND_DATA, FILE_READ_EA, FILE_WRITE_EA,
     FILE_EXECUTE, FILE_DELETE_CHILD, FILE_READ_ATTRIBUTES, FILE_WRITE_ATTRIBUTES,
@@ -157,3 +158,40 @@ class SIDResolver:
         result = name or sid
         self._cache[sid] = result
         return result
+
+
+def render_security_descriptor(sd, resolver):
+    """Render a parsed SR_SECURITY_DESCRIPTOR into a list of display lines.
+
+    `sd` is an impacket ldaptypes.SR_SECURITY_DESCRIPTOR. `resolver` is a
+    SIDResolver. Only ACCESS_ALLOWED_ACE / ACCESS_DENIED_ACE are rendered;
+    object ACEs (rare on filesystems) are skipped.
+    """
+    lines = []
+    owner = sd["OwnerSid"]
+    group = sd["GroupSid"]
+    if owner:
+        lines.append(f"OWNER: {resolver.resolve(owner.formatCanonical())}")
+    if group:
+        lines.append(f"GROUP: {resolver.resolve(group.formatCanonical())}")
+
+    dacl = sd["Dacl"]
+    if dacl is None:
+        lines.append("DACL: (none present - owner has implicit full control)")
+        return lines
+
+    verbs = {
+        ldaptypes.ACCESS_ALLOWED_ACE.ACE_TYPE: "ALLOWED",
+        ldaptypes.ACCESS_DENIED_ACE.ACE_TYPE: "DENIED",
+    }
+    for ace in dacl["Data"]:
+        verb = verbs.get(ace["AceType"])
+        if verb is None:
+            continue
+        sid_str = ace["Ace"]["Sid"].formatCanonical()
+        mask = ace["Ace"]["Mask"]["Mask"]
+        rights = ",".join(decode_file_access_mask(mask)) or f"0x{mask:x}"
+        inherited = " [INHERITED]" if ace["AceFlags"] & ldaptypes.ACE.INHERITED_ACE else ""
+        trustee = resolver.resolve(sid_str)
+        lines.append(f"{verb:<7} {trustee:<35} {rights}{inherited}")
+    return lines
